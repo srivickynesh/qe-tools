@@ -29,7 +29,7 @@ var ProwjobCmd = &cobra.Command{
 }
 
 func init() {
-	ProwjobCmd.AddCommand(periodicSlackReportCmd)
+	ProwjobCmd.AddCommand(summaryReportCmd)
 	ProwjobCmd.AddCommand(createReportCmd)
 	ProwjobCmd.AddCommand(healthCheckCmd)
 
