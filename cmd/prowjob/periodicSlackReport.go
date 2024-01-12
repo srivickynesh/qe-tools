@@ -47,17 +47,21 @@ func fetchTextContent(url string) (string, error) {
 		return "", fmt.Errorf("error reading the webpage content: %w", err)
 	}
 
-	return string(bodyBytes), nil
+	bodyString := string(bodyBytes)
+
+	cleanedString := removeANSIEscapeSequences(bodyString)
+
+	return cleanedString, nil
 }
 
 func constructMessage(bodyString string) (string, bool) {
-	cleanBody := removeANSIEscapeSequences(bodyString)
+	failureMatches := regexp.MustCompile(`(?s)(Summarizing.*?Test Suite Failed)`).FindStringSubmatch(bodyString)
 
-	if isJobFailed(cleanBody) {
+	if isJobFailed(bodyString) || failureMatches != nil {
 		message := "Test Suite Summary:\n"
-		message += extractTestResultsAndSummary(cleanBody)
-		message += extractDuration(cleanBody)
-		message += extractFailureSummary(cleanBody)
+		message += extractTestResultsAndSummary(bodyString)
+		message += extractDuration(bodyString)
+		message += formatFailures(failureMatches[1])
 		return message, false
 	}
 	return "Job Succeeded", true
@@ -68,16 +72,6 @@ func isJobFailed(body string) bool {
 	stateMatches := stateRegexp.FindStringSubmatch(body)
 
 	return len(stateMatches) == 2 && stateMatches[1] == "failed"
-}
-
-func extractFailureSummary(body string) string {
-	failureMatches := regexp.MustCompile(`(?s)(Summarizing.*?Test Suite Failed)`).FindStringSubmatch(body)
-
-	if failureMatches == nil && isJobFailed(removeANSIEscapeSequences(body)) {
-		return ""
-	}
-
-	return formatFailures(failureMatches[1]) + "\n"
 }
 
 func extractTestResultsAndSummary(body string) string {
@@ -118,7 +112,7 @@ func formatFailures(failures string) string {
 }
 
 func run(cmd *cobra.Command, args []string) error {
-	// Required build.log PATH for latest build
+	// Required GCS build.log PATH for latest build
 	prowURL := os.Getenv("PROW_URL") + "/build-log.txt"
 	bodyString, err := fetchTextContent(prowURL)
 	if err != nil {
