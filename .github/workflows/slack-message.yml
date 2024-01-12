@@ -3,24 +3,44 @@ name: Prow-CI
 on:
   schedule:
     - cron: '30 3 * * *'  # Runs every day at 3:30 AM UTC (9 AM IST)
+  workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
     container: 
-      image: golang:1.19
+      image: golang:1.20
 
     steps:
-    - name: Check out code
-      uses: actions/checkout@v4
+      - name: Check out code
+        uses: actions/checkout@v4
 
-    - name: Setup Go environment
-      uses: actions/setup-go@v4
+      - name: Setup Go environment
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.20'
 
-    - name: Run Test and Send Slack Message
-      run: go run main.go prowjob periodic-slack-report
-      env:
-        SLACK_TOKEN: ${{ secrets.SLACK_TOKEN }}
-        URL: ${{ secrets.URL }}
-        PROW_URL: ${{ secrets.PROW_URL }}
-        CHANNEL_ID: ${{ secrets.CHANNEL_ID }}
+      - name: Fetch URL Content
+        run: |
+          latest=$(curl -s ${{ secrets.URL }})
+          echo "LATEST=$latest" >> $GITHUB_ENV
+
+      - name: Run Test and Store Output
+        run: |
+          go run main.go prowjob periodic-report > prowjob-output.txt
+          echo $PROW_URL
+        env:
+          PROW_URL: ${{ secrets.PROW_URL }}${{ env.LATEST }}
+
+      - name: Conditional Slack Message
+        run: |
+          output=$(cat prowjob-output.txt)
+          if [ "$output" != "Job Succeeded" ]; then
+            echo "Job Failed, sending Slack message."
+            go run main.go send-slack-message -m "$output"
+          else
+            echo "Job Succeeded, not sending Slack message."
+          fi
+        env:
+          SLACK_TOKEN: ${{ secrets.SLACK_TOKEN }}
+          CHANNEL_ID: ${{ secrets.CHANNEL_ID }}

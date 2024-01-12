@@ -7,7 +7,7 @@ import (
 const (
 	// The name of the openshift-ci step where the "createReport" command is used
 	reportStepName    = "redhat-appstudio-report"
-	bucketName        = "origin-ci-test"
+	bucketName        = "test-platform-results"
 	prowJobYAMLPrefix = "https://prow.ci.openshift.org/prowjob?prowjob="
 )
 

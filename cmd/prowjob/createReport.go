@@ -4,9 +4,13 @@ import (
 	"bufio"
 	"encoding/xml"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/redhat-appstudio/qe-tools/pkg/customjunit"
+	"github.com/redhat-appstudio/qe-tools/pkg/types"
 
 	"github.com/GoogleCloudPlatform/testgrid/metadata"
 	"github.com/redhat-appstudio/qe-tools/pkg/prow"
@@ -23,12 +27,15 @@ import (
 	"github.com/spf13/viper"
 )
 
+var formatReportPortal bool
+
 const (
 	buildLogFilename = "build-log.txt"
 	finishedFilename = "finished.json"
-	junitFilename    = `/(j?unit|e2e).*\.xml`
 
 	gcsBrowserURLPrefix = "https://gcsweb-ci.apps.ci.l2s4.p1.openshiftapps.com/gcs/origin-ci-test/"
+
+	reportPortalFormatParamName = "report-portal-format"
 )
 
 // createReportCmd represents the createReport command
@@ -36,19 +43,19 @@ var createReportCmd = &cobra.Command{
 	Use:   "create-report",
 	Short: "Analyze specified prow job and create a report in junit/html format",
 	PreRunE: func(cmd *cobra.Command, _ []string) error {
-		if viper.GetString(prowJobIDParamName) == "" {
+		if viper.GetString(types.ProwJobIDParamName) == "" {
 			_ = cmd.Usage()
-			return fmt.Errorf("parameter %q not provided, neither %s env var was set", prowJobIDParamName, prowJobIDEnv)
+			return fmt.Errorf("parameter %q not provided, neither %s env var was set", types.ProwJobIDParamName, types.ProwJobIDEnv)
 		}
 		return nil
 	},
 	SilenceUsage: true,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		jobID := viper.GetString(prowJobIDParamName)
+		jobID := viper.GetString(types.ProwJobIDParamName)
 
 		cfg := prow.ScannerConfig{
 			ProwJobID:      jobID,
-			FileNameFilter: []string{finishedFilename, buildLogFilename, junitFilename},
+			FileNameFilter: []string{finishedFilename, buildLogFilename, types.JunitFilename},
 		}
 
 		scanner, err := prow.NewArtifactScanner(cfg)
@@ -101,7 +108,7 @@ var createReportCmd = &cobra.Command{
 			}
 		}
 
-		artifactDir := viper.GetString(artifactDirParamName)
+		artifactDir := viper.GetString(types.ArtifactDirParamName)
 		if artifactDir == "" {
 			artifactDir = "./tmp/" + jobID
 			klog.Warningf("path to artifact dir was not provided - using default %q\n", artifactDir)
@@ -136,16 +143,73 @@ var createReportCmd = &cobra.Command{
 
 		klog.Infof("JUnit report saved to: %s/junit.xml", artifactDir)
 		klog.Infof("HTML report saved to: %s/junit-summary.html", artifactDir)
+
+		if formatReportPortal {
+			reportPortalSuites := &customjunit.TestSuites{}
+			if err := readXMLFile(fmt.Sprintf("%s/junit.xml", artifactDir), reportPortalSuites); err != nil {
+				return fmt.Errorf("could not read junit.xml file")
+			}
+
+			changeDisabledToSkipped(overallJUnitSuites, reportPortalSuites)
+
+			generatedReportPortalFilepath := filepath.Clean(artifactDir + "/junit-rp.xml")
+			outRPFile, err := os.Create(generatedReportPortalFilepath)
+			if err != nil {
+				return fmt.Errorf("cannot create file '%s': %+v", generatedReportPortalFilepath, err)
+			}
+
+			if err := xml.NewEncoder(bufio.NewWriter(outRPFile)).Encode(reportPortalSuites); err != nil {
+				return fmt.Errorf("cannot encode JUnit suites struct '%+v' into file located at '%s': %+v", reportPortalSuites, generatedJunitFilepath, err)
+			}
+			klog.Infof("JUnit report for Report Portal saved to: %s/junit-rp.xml", artifactDir)
+		}
+
 		return nil
 	},
 }
 
-func init() {
-	createReportCmd.Flags().StringVar(&prowJobID, prowJobIDParamName, "", "Prow job ID to analyze")
+func readXMLFile(xmlPath string, result any) error {
+	xmlFile, err := os.Open(filepath.Clean(xmlPath))
+	if err != nil {
+		return fmt.Errorf("could not open file '%s', error: %v", xmlPath, err)
+	}
+	defer xmlFile.Close()
 
-	_ = viper.BindPFlag(artifactDirParamName, createReportCmd.Flags().Lookup(artifactDirParamName))
-	_ = viper.BindPFlag(prowJobIDParamName, createReportCmd.Flags().Lookup(prowJobIDParamName))
+	xmlBytes, err := io.ReadAll(xmlFile)
+	if err != nil {
+		return err
+	}
+
+	if err = xml.Unmarshal(xmlBytes, &result); err != nil {
+		klog.Errorf("cannot decode JUnit suite %q into xml: %+v", xmlPath, err)
+	}
+
+	return nil
+}
+
+func changeDisabledToSkipped(original *reporters.JUnitTestSuites, custom *customjunit.TestSuites) {
+	totalSkipped := 0
+	for _, suite := range original.TestSuites {
+		if suite.Disabled != 0 {
+			for i := range custom.TestSuites {
+				if custom.TestSuites[i].Name == suite.Name {
+					custom.TestSuites[i].Skipped += suite.Disabled
+				}
+				totalSkipped += custom.TestSuites[i].Skipped
+			}
+		}
+	}
+	custom.Skipped = totalSkipped
+}
+
+func init() {
+	createReportCmd.Flags().StringVar(&prowJobID, types.ProwJobIDParamName, "", "Prow job ID to analyze")
+	createReportCmd.Flags().BoolVar(&formatReportPortal, reportPortalFormatParamName, false, "Format for Report Portal")
+
+	_ = viper.BindPFlag(types.ArtifactDirParamName, createReportCmd.Flags().Lookup(types.ArtifactDirParamName))
+	_ = viper.BindPFlag(types.ProwJobIDParamName, createReportCmd.Flags().Lookup(types.ProwJobIDParamName))
+	_ = viper.BindPFlag(reportPortalFormatParamName, createReportCmd.Flags().Lookup(reportPortalFormatParamName))
 	// Bind environment variables to viper (in case the associated command's parameter is not provided)
-	_ = viper.BindEnv(prowJobIDParamName, prowJobIDEnv)
-	_ = viper.BindEnv(artifactDirParamName, artifactDirEnv)
+	_ = viper.BindEnv(types.ProwJobIDParamName, types.ProwJobIDEnv)
+	_ = viper.BindEnv(types.ArtifactDirParamName, types.ArtifactDirEnv)
 }
