@@ -124,7 +124,11 @@ func run(cmd *cobra.Command, args []string) {
 		}
 	}
 
-	rand.Shuffle(len(eligibleParticipants), func(i, j int) {
+	src := rand.NewSource(time.Now().UnixNano())
+	// #nosec G404
+	r := rand.New(src)
+
+	r.Shuffle(len(eligibleParticipants), func(i, j int) {
 		eligibleParticipants[i], eligibleParticipants[j] = eligibleParticipants[j], eligibleParticipants[i]
 	})
 
