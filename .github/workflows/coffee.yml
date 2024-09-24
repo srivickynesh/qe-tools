@@ -9,8 +9,7 @@ jobs:
   coffee-break:
     runs-on: ubuntu-latest
     container:
-      image: quay.io/redhat-appstudio-qe/qe-tools:latest
-
+      image: quay.io/konflux-ci/qe-tools:latest
     steps:
       - name: Check out code
         uses: actions/checkout@v4
